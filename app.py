@@ -117,7 +117,7 @@ else:
                 
                 st.write("### 🏹 Today's EV Hunt List")
                 
-                # Render the table with checkboxes or selection for simulation tracking
+                # Render rows dynamically
                 for idx, row in df.iterrows():
                     col1, col2, col3, col4 = st.columns([3, 2, 1, 2])
                     with col1:
@@ -125,10 +125,10 @@ else:
                     with col2:
                         st.markdown(f"`{row['Target']}` | {row['Grade']}")
                     with col3:
-                        st.markdown(f"**{row['Odds']素}** ({row['Book']})")
+                        st.markdown(f"**{row['Odds']}** ({row['Book']})")
                     with col4:
-                        # Simple buttons to let user simulate grading the bet later
                         if st.button(f"Simulate Win (+$10)", key=f"win_{idx}"):
+                            # Calculate payout for a standard $10 risk
                             profit = 10.0 if row['Odds'] == 100 else (10.0 * (row['Odds']/100) if row['Odds'] > 0 else 10.0 / (abs(row['Odds'])/100))
                             st.session_state.bankroll += profit
                             st.session_state.history.append(f"✅ Won: {row['Player']} {row['Target']} ({row['Odds']})")
@@ -140,4 +140,11 @@ else:
                     st.markdown("---")
                 
                 if st.session_state.history:
-                    st.write("### 📝 Simulation
+                    st.write("### 📝 Simulation History")
+                    for log in reversed(st.session_state.history):
+                        st.write(log)
+            else:
+                st.info("No matching props found yet for the currently checked games. Try switching markets or check back later!")
+
+    except Exception as e:
+        st.error(f"An error occurred: {e}")
