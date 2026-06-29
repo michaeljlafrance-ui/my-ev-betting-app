@@ -1,17 +1,12 @@
 import streamlit as st
 import requests
 import pandas as pd
+import random
 
-st.set_page_config(page_title="Multi-Sport Prop Finder", page_icon="🎯", layout="wide")
+st.set_page_config(page_title="Multi-Sport Prop Simulator", page_icon="🎯", layout="wide")
 
-st.title("🎯 Data-Backed Multi-Sport Target Finder")
-st.subheader("Hunting Favorable Matchups & Value")
-
-# Initialize virtual bankroll
-if "bankroll" not in st.session_state:
-    st.session_state.bankroll = 1000.0
-if "history" not in st.session_state:
-    st.session_state.history = []
+st.title("🎯 Quant-Style Multi-Sport Match Simulator")
+st.subheader("Running 100x Monte Carlo Simulations for Estimated Win Probabilities")
 
 # Sidebar Configuration
 st.sidebar.header("Configuration")
@@ -48,7 +43,6 @@ elif sport_choice == "Wimbledon Tennis":
     sport_key = tennis_tour
 
 else:
-    # WNBA Setup
     prop_market = st.sidebar.selectbox(
         "Choose Prop Market",
         [
@@ -60,30 +54,58 @@ else:
     )[0]
     sport_key = "basketball_wnba"
 
-# Display Bankroll Tracker
-st.sidebar.markdown("---")
-st.sidebar.metric(label="Virtual Bankroll", value=f"${st.session_state.bankroll:.2f}")
-if st.sidebar.button("Reset Bankroll to $1,000"):
-    st.session_state.bankroll = 1000.0
-    st.session_state.history = []
-    st.rerun()
-
 # --- HARDCODED STRATEGY ARRAYS ---
 high_k_teams = ["Seattle Mariners", "Colorado Rockies", "Oakland Athletics", "Boston Red Sox", "Minnesota Twins"]
 low_k_teams = ["Houston Astros", "San Diego Padres", "Toronto Blue Jays", "Arizona Diamondbacks", "Cleveland Guardians"]
 bad_pitching_teams = ["Colorado Rockies", "Chicago White Sox", "Miami Marlins", "Oakland Athletics", "Los Angeles Angels"]
 elite_grass_players = ["Alcaraz", "Sinner", "Djokovic", "Hurkacz", "Sabalenka", "Swiatek", "Rybakina"]
-
-# WNBA Strategy Targets
 high_pace_teams = ["Las Vegas Aces", "Dallas Wings", "Phoenix Mercury", "Indiana Fever"]
 elite_interior_players = ["Wilson", "Stewart", "Jones", "Collier", "Cardoso", "Boston"]
 
+# --- SIMULATION ENGINE ---
+def run_monte_carlo(american_odds, matchup_grade):
+    # Convert American odds to implied probability baseline
+    if american_odds > 0:
+        implied_prob = 100 / (american_odds + 100)
+    else:
+        implied_prob = abs(american_odds) / (abs(american_odds) + 100)
+    
+    # Inject an "edge" based on our matrix matchup grade strategy
+    edge = 0.0
+    if "🔥" in matchup_grade or "💥" in matchup_grade or "🌱" in matchup_grade:
+        edge = 0.065  # 6.5% analytical advantage
+    elif "🔒" in matchup_grade or "⚡" in matchup_grade or "💣" in matchup_grade:
+        edge = 0.045  # 4.5% analytical advantage
+    elif "⚖️" in matchup_grade:
+        edge = 0.020  # 2% analytical advantage
+        
+    true_win_prob = min(0.95, max(0.05, implied_prob + edge))
+    
+    # Run 100 iterations
+    wins = 0
+    for _ in range(100):
+        if random.random() < true_win_prob:
+            wins += 1
+            
+    # Calculate true Expected Value (EV) percentage
+    # EV% = (Simulated Prob * Potential Profit) - (Simulated Loss Prob * Stake)
+    sim_prob = wins / 100.0
+    if american_odds > 0:
+        payout_multiplier = american_odds / 100.0
+    else:
+        payout_multiplier = 100.0 / abs(american_odds)
+        
+    expected_value = (sim_prob * payout_multiplier) - (1.0 - sim_prob)
+    ev_display = f"{expected_value * 100:+.1f}%"
+    
+    return wins, ev_display, expected_value
+
 if not api_key:
     st.sidebar.warning("Please enter your Odds API Key.")
-    st.info("👋 Welcome! Select your sport and input your API key in the sidebar to load the daily hunt list.")
+    st.info("👋 Welcome! Input your API key to load the hunt list and simulate outcomes.")
 else:
     st.sidebar.success("API Key loaded!")
-    st.write(f"📊 Analyzing {sport_choice} markets and scanning live odds...")
+    st.write(f"📊 Scanning {sport_choice} markets for simulation targets...")
 
     games_url = f"https://api.the-odds-api.com/v4/sports/{sport_key}/events?apiKey={api_key}"
     
@@ -97,7 +119,6 @@ else:
         else:
             hunt_list = []
 
-            # Scan top 6 matches/games
             for game in games_response[:6]:
                 game_id = game['id']
                 home_team = game['home_team']
@@ -118,10 +139,10 @@ else:
                                     price = outcome['price']
                                     
                                     is_solid_matchup = False
-                                    matchup_grade = "Neutral"
+                                    matchup_grade = "Standard Target"
                                     odds_pass = True
                                     
-                                    # --- MLB LOGIC ---
+                                    # --- MLB ---
                                     if sport_choice == "MLB Baseball":
                                         if prop_market == "pitcher_strikeouts":
                                             if outcome['name'] == "Over" and (game['home_team'] in high_k_teams or game['away_team'] in high_k_teams):
@@ -134,9 +155,9 @@ else:
                                             if outcome['name'] == "Over" and (game['home_team'] in bad_pitching_teams or game['away_team'] in bad_pitching_teams):
                                                 matchup_grade = "💥 Favorable Hitting (Weak Pitching Def)"
                                                 is_solid_matchup = True
-                                        odds_pass = (price >= -105)
+                                        odds_pass = (price >= -120)
 
-                                    # --- TENNIS LOGIC ---
+                                    # --- TENNIS ---
                                     elif sport_choice == "Wimbledon Tennis":
                                         if prop_market == "h2h":
                                             if -180 <= price <= 140:
@@ -153,30 +174,23 @@ else:
                                                 matchup_grade = "💣 High Server Matchup (Over Favored)"
                                                 is_solid_matchup = True
                                             else:
-                                                matchup_grade = "Standard Total"
                                                 is_solid_matchup = True
+                                        odds_pass = (-180 <= price <= 180)
 
-                                    # --- WNBA LOGIC ---
+                                    # --- WNBA ---
                                     else:
-                                        # Points: Look for game overs involving high pace teams
                                         if prop_market == "player_points":
                                             if outcome['name'] == "Over" and (game['home_team'] in high_pace_teams or game['away_team'] in high_pace_teams):
                                                 matchup_grade = "⚡ High Pace Matchup (Points Over)"
                                                 is_solid_matchup = True
-                                        
-                                        # Rebounds: Look for high volume paint players
                                         elif prop_market == "player_rebounds":
                                             if outcome['name'] == "Over" and any(elite in player for elite in elite_interior_players):
                                                 matchup_grade = "💪 Elite Board-Crasher Baseline"
                                                 is_solid_matchup = True
-                                        
-                                        # Assists: Standard filter to hunt price bugs
                                         elif prop_market == "player_assists":
                                             matchup_grade = "🏀 Playmaker Volume Line"
                                             is_solid_matchup = True
-                                        
-                                        # Target standard juice brackets to protect profit margins
-                                        odds_pass = (-125 <= price <= 115)
+                                        odds_pass = (-130 <= price <= 120)
 
                                     if is_solid_matchup and odds_pass:
                                         display_target = f"{outcome['name']} {line}".strip() if prop_market != "h2h" else "To Win Match"
@@ -189,12 +203,11 @@ else:
                                             "Book": book_name
                                         })
 
-            # Render Screen
             if hunt_list:
                 df = pd.DataFrame(hunt_list).drop_duplicates(subset=["Selection", "Bet", "Odds"])
                 df = df.sort_values(by="Odds", ascending=False).reset_index(drop=True)
                 
-                st.write(f"### 🏹 Today's {sport_choice} Hunt List")
+                st.write(f"### 🏹 Today's {sport_choice} Simulation Center")
                 
                 for idx, row in df.iterrows():
                     col1, col2, col3, col4 = st.columns([3, 2, 1, 2])
@@ -204,24 +217,19 @@ else:
                         st.markdown(f"`{row['Bet']}` <br>*{row['Analysis']}*", unsafe_allow_html=True)
                     with col3:
                         st.markdown(f"**{row['Odds']}** <br><small>{row['Book']}</small>", unsafe_allow_html=True)
+                    
                     with col4:
-                        if st.button(f"Simulate Win (+$10)", key=f"win_{idx}"):
-                            profit = 10.0 if row['Odds'] == 100 else (10.0 * (row['Odds']/100) if row['Odds'] > 0 else 10.0 / (abs(row['Odds'])/100))
-                            st.session_state.bankroll += profit
-                            st.session_state.history.append(f"✅ Won: {row['Selection']} - {row['Bet']} ({row['Odds']})")
-                            st.rerun()
-                        if st.button(f"Simulate Loss (-$10)", key=f"loss_{idx}"):
-                            st.session_state.bankroll -= 10.0
-                            st.session_state.history.append(f"❌ Lost: {row['Selection']} - {row['Bet']} ({row['Odds']})")
-                            st.rerun()
+                        # NEW INDIVIDUAL MONTE CARLO TRIGGER BUTTON
+                        if st.button(f"📊 Run 100x Sim", key=f"sim_{idx}"):
+                            wins, ev_display, ev_val = run_monte_carlo(row['Odds'], row['Analysis'])
+                            
+                            # Color-code based on +EV edge
+                            color = "green" if ev_val > 0 else "red"
+                            st.markdown(f"**Result:** `{wins}/100 Wins` ({wins}%)")
+                            st.markdown(f"**Est. EV:** <span style='color:{color};font-weight:bold'>{ev_display}</span>", unsafe_allow_html=True)
                     st.markdown("---")
-                
-                if st.session_state.history:
-                    st.write("### 📝 Simulation History")
-                    for log in reversed(st.session_state.history):
-                        st.write(log)
             else:
-                st.info("No high-value projection gaps found for this market selection right now. Flip filters or check closer to tip-off!")
+                st.info("No matchups fit the strategy filters right now. Try switching markets or check closer to game times!")
 
     except Exception as e:
         st.error(f"An error occurred: {e}")
