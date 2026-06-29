@@ -7,7 +7,7 @@ st.set_page_config(page_title="Multi-Sport Prop Finder", page_icon="🎯", layou
 st.title("🎯 Data-Backed Multi-Sport Target Finder")
 st.subheader("Hunting Favorable Matchups & Value")
 
-# Initialize a virtual bankroll in the app's memory if it doesn't exist yet
+# Initialize virtual bankroll
 if "bankroll" not in st.session_state:
     st.session_state.bankroll = 1000.0
 if "history" not in st.session_state:
@@ -17,8 +17,8 @@ if "history" not in st.session_state:
 st.sidebar.header("Configuration")
 api_key = st.sidebar.text_input("Enter your Odds API Key", type="password")
 
-# 1. SELECT THE SPORT FIRST
-sport_choice = st.sidebar.selectbox("Choose Sport", ["MLB Baseball", "Wimbledon Tennis"])
+# 1. SELECT THE SPORT
+sport_choice = st.sidebar.selectbox("Choose Sport", ["MLB Baseball", "Wimbledon Tennis", "WNBA Basketball"])
 
 # 2. DYNAMIC DROPDOWNS BASED ON SPORT
 if sport_choice == "MLB Baseball":
@@ -33,8 +33,8 @@ if sport_choice == "MLB Baseball":
         format_func=lambda x: x[1]
     )[0]
     sport_key = "baseball_mlb"
-else:
-    # Tennis lets you pick ATP or WTA and the type of bet
+
+elif sport_choice == "Wimbledon Tennis":
     tennis_tour = st.sidebar.selectbox("Tour", [["tennis_atp_wimbledon", "ATP (Men's)"], ["tennis_wta_wimbledon", "WTA (Women's)"]], format_func=lambda x: x[1])[0]
     prop_market = st.sidebar.selectbox(
         "Choose Betting Market",
@@ -47,7 +47,20 @@ else:
     )[0]
     sport_key = tennis_tour
 
-# Display Bankroll Tracker in Sidebar
+else:
+    # WNBA Setup
+    prop_market = st.sidebar.selectbox(
+        "Choose Prop Market",
+        [
+            ["player_points", "Player Points"],
+            ["player_rebounds", "Player Rebounds"],
+            ["player_assists", "Player Assists"]
+        ],
+        format_func=lambda x: x[1]
+    )[0]
+    sport_key = "basketball_wnba"
+
+# Display Bankroll Tracker
 st.sidebar.markdown("---")
 st.sidebar.metric(label="Virtual Bankroll", value=f"${st.session_state.bankroll:.2f}")
 if st.sidebar.button("Reset Bankroll to $1,000"):
@@ -55,13 +68,15 @@ if st.sidebar.button("Reset Bankroll to $1,000"):
     st.session_state.history = []
     st.rerun()
 
-# --- HARDCODED MATRIX STRATEGY BASES ---
+# --- HARDCODED STRATEGY ARRAYS ---
 high_k_teams = ["Seattle Mariners", "Colorado Rockies", "Oakland Athletics", "Boston Red Sox", "Minnesota Twins"]
 low_k_teams = ["Houston Astros", "San Diego Padres", "Toronto Blue Jays", "Arizona Diamondbacks", "Cleveland Guardians"]
 bad_pitching_teams = ["Colorado Rockies", "Chicago White Sox", "Miami Marlins", "Oakland Athletics", "Los Angeles Angels"]
-
-# Elite grass-court servers/players (Great targets for ML or Game Overs on Grass)
 elite_grass_players = ["Alcaraz", "Sinner", "Djokovic", "Hurkacz", "Sabalenka", "Swiatek", "Rybakina"]
+
+# WNBA Strategy Targets
+high_pace_teams = ["Las Vegas Aces", "Dallas Wings", "Phoenix Mercury", "Indiana Fever"]
+elite_interior_players = ["Wilson", "Stewart", "Jones", "Collier", "Cardoso", "Boston"]
 
 if not api_key:
     st.sidebar.warning("Please enter your Odds API Key.")
@@ -82,12 +97,12 @@ else:
         else:
             hunt_list = []
 
-            # Scan the events
-            for game in games_response[:6]:  # Scan top 6 events
+            # Scan top 6 matches/games
+            for game in games_response[:6]:
                 game_id = game['id']
                 home_team = game['home_team']
                 away_team = game['away_team']
-                matchup_name = f"{away_team} @ {home_team}" if sport_choice == "MLB Baseball" else f"{home_team} vs {away_team}"
+                matchup_name = f"{away_team} @ {home_team}" if sport_choice != "Wimbledon Tennis" else f"{home_team} vs {away_team}"
                 
                 odds_url = f"https://api.the-odds-api.com/v4/sports/{sport_key}/events/{game_id}/odds?apiKey={api_key}&regions=us&markets={prop_market}&oddsFormat=american"
                 odds_response = requests.get(odds_url).json()
@@ -104,8 +119,9 @@ else:
                                     
                                     is_solid_matchup = False
                                     matchup_grade = "Neutral"
+                                    odds_pass = True
                                     
-                                    # --- BASELINE LOGIC FOR MLB ---
+                                    # --- MLB LOGIC ---
                                     if sport_choice == "MLB Baseball":
                                         if prop_market == "pitcher_strikeouts":
                                             if outcome['name'] == "Over" and (game['home_team'] in high_k_teams or game['away_team'] in high_k_teams):
@@ -118,41 +134,50 @@ else:
                                             if outcome['name'] == "Over" and (game['home_team'] in bad_pitching_teams or game['away_team'] in bad_pitching_teams):
                                                 matchup_grade = "💥 Favorable Hitting (Weak Pitching Def)"
                                                 is_solid_matchup = True
-                                        
-                                        # Odds constraint filter for MLB (-105 or better)
                                         odds_pass = (price >= -105)
 
-                                    # --- BASELINE LOGIC FOR TENNIS ---
-                                    else:
-                                        # 1. Moneyline Filter (H2H): Target competitive sweet spot
+                                    # --- TENNIS LOGIC ---
+                                    elif sport_choice == "Wimbledon Tennis":
                                         if prop_market == "h2h":
                                             if -180 <= price <= 140:
                                                 matchup_grade = "⚖️ Competitive Value Zone"
                                                 is_solid_matchup = True
-                                                # Check if an elite grass player is in this matchup
                                                 if any(elite in player for elite in elite_grass_players) and price < 0:
                                                     matchup_grade = "🌱 Elite Grass Favorite"
-                                        
-                                        # 2. Handicap Filter (Spreads)
                                         elif prop_market == "spreads":
                                             if -4.5 <= float(line) <= 4.5:
                                                 matchup_grade = "🎾 Tight Game Spread"
                                                 is_solid_matchup = True
-                                        
-                                        # 3. Totals Filter (Over/Under Games)
                                         elif prop_market == "totals":
-                                            # If elite grass servers are playing, back the OVER games due to tiebreak likelihood
                                             if outcome['name'] == "Over" and any(elite in matchup_name for elite in elite_grass_players):
                                                 matchup_grade = "💣 High Server Matchup (Over Favored)"
                                                 is_solid_matchup = True
                                             else:
                                                 matchup_grade = "Standard Total"
                                                 is_solid_matchup = True
-                                                
-                                        # Tennis filter accepts smart favorite odds down to -180
-                                        odds_pass = True 
 
-                                    # Append to final list if conditions met
+                                    # --- WNBA LOGIC ---
+                                    else:
+                                        # Points: Look for game overs involving high pace teams
+                                        if prop_market == "player_points":
+                                            if outcome['name'] == "Over" and (game['home_team'] in high_pace_teams or game['away_team'] in high_pace_teams):
+                                                matchup_grade = "⚡ High Pace Matchup (Points Over)"
+                                                is_solid_matchup = True
+                                        
+                                        # Rebounds: Look for high volume paint players
+                                        elif prop_market == "player_rebounds":
+                                            if outcome['name'] == "Over" and any(elite in player for elite in elite_interior_players):
+                                                matchup_grade = "💪 Elite Board-Crasher Baseline"
+                                                is_solid_matchup = True
+                                        
+                                        # Assists: Standard filter to hunt price bugs
+                                        elif prop_market == "player_assists":
+                                            matchup_grade = "🏀 Playmaker Volume Line"
+                                            is_solid_matchup = True
+                                        
+                                        # Target standard juice brackets to protect profit margins
+                                        odds_pass = (-125 <= price <= 115)
+
                                     if is_solid_matchup and odds_pass:
                                         display_target = f"{outcome['name']} {line}".strip() if prop_market != "h2h" else "To Win Match"
                                         hunt_list.append({
@@ -164,7 +189,7 @@ else:
                                             "Book": book_name
                                         })
 
-            # Display Results & Simulator Panel
+            # Render Screen
             if hunt_list:
                 df = pd.DataFrame(hunt_list).drop_duplicates(subset=["Selection", "Bet", "Odds"])
                 df = df.sort_values(by="Odds", ascending=False).reset_index(drop=True)
@@ -196,7 +221,7 @@ else:
                     for log in reversed(st.session_state.history):
                         st.write(log)
             else:
-                st.info("No matching targets found for the selected market right now. Try toggling markets or checking back closer to match times!")
+                st.info("No high-value projection gaps found for this market selection right now. Flip filters or check closer to tip-off!")
 
     except Exception as e:
         st.error(f"An error occurred: {e}")
