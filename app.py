@@ -2,30 +2,53 @@ import streamlit as st
 import requests
 import pandas as pd
 
-st.set_page_config(page_title="Matchup Target Finder", page_icon="🎯", layout="wide")
+st.set_page_config(page_title="Prop Hunt & Sim", page_icon="🎯", layout="wide")
 
-st.title("🎯 Data-Backed MLB Prop Target Finder")
-st.subheader("Hunting for Favorable Matchups at -105 or Better")
+st.title("🎯 Data-Backed MLB Prop Finder & Simulator")
+st.subheader("Hunting Favorable Matchups (-105 or Better)")
 
-# Sidebar
+# Initialize a virtual bankroll in the app's memory if it doesn't exist yet
+if "bankroll" not in st.session_state:
+    st.session_state.bankroll = 1000.0
+if "history" not in st.session_state:
+    st.session_state.history = []
+
+# Sidebar Configuration
 st.sidebar.header("Configuration")
 api_key = st.sidebar.text_input("Enter your Odds API Key", type="password")
 
-# --- DATA BASELINE: TEAM STRIKEOUT MATRICES ---
-# This serves as our model's "brain" regarding matchups. 
-# We flag teams that strike out a lot (Great targets for Pitcher Over props)
-# and teams that rarely strike out (Great targets for Pitcher Under props).
+# Expanded Market Dropdown
+prop_market = st.sidebar.selectbox(
+    "Choose Prop Market",
+    [
+        ["pitcher_strikeouts", "Pitcher Strikeouts"],
+        ["batter_total_bases", "Batter Total Bases"],
+        ["batter_hits", "Batter Hits"],
+        ["batter_home_runs", "Batter Home Runs"]
+    ],
+    format_func=lambda x: x[1]
+)[0]
+
+# Display Bankroll Tracker in Sidebar
+st.sidebar.markdown("---")
+st.sidebar.metric(label="Virtual Bankroll", value=f"${st.session_state.bankroll:.2f}")
+if st.sidebar.button("Reset Bankroll to $1,000"):
+    st.session_state.bankroll = 1000.0
+    st.session_state.history = []
+    st.rerun()
+
+# --- DATA BASELINE: MATCHUP MATRICES ---
 high_k_teams = ["Seattle Mariners", "Colorado Rockies", "Oakland Athletics", "Boston Red Sox", "Minnesota Twins"]
 low_k_teams = ["Houston Astros", "San Diego Padres", "Toronto Blue Jays", "Arizona Diamondbacks", "Cleveland Guardians"]
+bad_pitching_teams = ["Colorado Rockies", "Chicago White Sox", "Miami Marlins", "Oakland Athletics", "Los Angeles Angels"]
 
 if not api_key:
-    st.sidebar.warning("Please enter your Odds API Key to fetch live data.")
-    st.info("👋 Welcome! Input your API key to generate today's matchup-backed hunt list.")
+    st.sidebar.warning("Please enter your Odds API Key.")
+    st.info("👋 Welcome! Input your API key in the sidebar to load today's MLB player props and start hunting.")
 else:
     st.sidebar.success("API Key loaded!")
-    st.write("📊 Analyzing today's matchups and scanning odds...")
+    st.write("📊 Analyzing today's matchups and scanning live odds...")
 
-    # 1. Fetch active MLB games
     games_url = f"https://api.the-odds-api.com/v4/sports/baseball_mlb/events?apiKey={api_key}"
     
     try:
@@ -38,66 +61,83 @@ else:
         else:
             hunt_list = []
 
-            # 2. Loop through games to analyze matchups and odds simultaneously
-            for game in games_response[:5]:  # Scanning first 5 games to save API quota
+            # Scan upcoming games
+            for game in games_response[:5]:
                 game_id = game['id']
                 home_team = game['home_team']
                 away_team = game['away_team']
                 matchup_name = f"{away_team} @ {home_team}"
                 
-                # Fetch Pitcher Strikeout Props for this game
-                odds_url = f"https://api.the-odds-api.com/v4/sports/baseball_mlb/events/{game_id}/odds?apiKey={api_key}&regions=us&markets=pitcher_strikeouts&oddsFormat=american"
+                odds_url = f"https://api.the-odds-api.com/v4/sports/baseball_mlb/events/{game_id}/odds?apiKey={api_key}&regions=us&markets={prop_market}&oddsFormat=american"
                 odds_response = requests.get(odds_url).json()
                 
                 if 'bookmakers' in odds_response:
                     for bookmaker in odds_response['bookmakers']:
                         book_name = bookmaker['title']
                         for market in bookmaker['markets']:
-                            if market['key'] == 'pitcher_strikeouts':
+                            if market['key'] == prop_market:
                                 for outcome in market['outcomes']:
                                     player = outcome['description']
                                     line = outcome.get('point', 'N/A')
                                     price = outcome['price']
-                                    bet_type = outcome['name'] # Over or Under
+                                    bet_type = outcome['name']
                                     
-                                    # Determine who this pitcher is playing against
-                                    # (If the pitcher's team is Home, they are pitching against the Away team)
-                                    # Note: For a strict model, we'd verify player team, but checking both teams in the matchup works as a baseline filter.
-                                    
-                                    matchup_grade = "Neutral"
                                     is_solid_matchup = False
+                                    matchup_grade = "Neutral"
                                     
-                                    # MODEL LOGIC: 
-                                    # If we want an OVER, we want the opponent to be a high strikeout team.
-                                    if bet_type == "Over" and (home_team in high_k_teams or away_team in high_k_teams):
-                                        matchup_grade = "🔥 Highly Favorable (High K Opponent)"
-                                        is_solid_matchup = True
-                                    # If we want an UNDER, we want the opponent to be a disciplined, low strikeout team.
-                                    elif bet_type == "Under" and (home_team in low_k_teams or away_team in low_k_teams):
-                                        matchup_grade = "🔒 Favorable Under (Disciplined Opponent)"
-                                        is_solid_matchup = True
-                                        
-                                    # STRATEGY FILTER: Must be a data-backed matchup AND odds must be -105 or better
+                                    # Matchup Logic based on selected market
+                                    if prop_market == "pitcher_strikeouts":
+                                        if bet_type == "Over" and (home_team in high_k_teams or away_team in high_k_teams):
+                                            matchup_grade = "🔥 Highly Favorable (High K Opponent)"
+                                            is_solid_matchup = True
+                                        elif bet_type == "Under" and (home_team in low_k_teams or away_team in low_k_teams):
+                                            matchup_grade = "🔒 Favorable Under (Disciplined Opponent)"
+                                            is_solid_matchup = True
+                                    
+                                    elif prop_market in ["batter_total_bases", "batter_hits", "batter_home_runs"]:
+                                        if bet_type == "Over" and (home_team in bad_pitching_teams or away_team in bad_pitching_teams):
+                                            matchup_grade = "💥 Favorable Hitting (Weak Pitching Def)"
+                                            is_solid_matchup = True
+
+                                    # Filter Strategy: Solid Matchup + Odds -105 or better
                                     if is_solid_matchup and price >= -105:
                                         hunt_list.append({
                                             "Matchup": matchup_name,
-                                            "Player Target": player,
-                                            "Bet Recommendation": f"{bet_type} {line}",
-                                            "Matchup Analysis": matchup_grade,
+                                            "Player": player,
+                                            "Target": f"{bet_type} {line}",
+                                            "Grade": matchup_grade,
                                             "Odds": price,
-                                            "Sportsbook Available": book_name
+                                            "Book": book_name
                                         })
 
-            # 3. Display results
+            # Display Results & Simulation Interactive Panel
             if hunt_list:
-                df = pd.DataFrame(hunt_list)
-                df = df.sort_values(by="Odds", ascending=False)
+                df = pd.DataFrame(hunt_list).drop_duplicates(subset=["Player", "Target", "Odds"])
+                df = df.sort_values(by="Odds", ascending=False).reset_index(drop=True)
                 
-                st.write("### 🏹 Today's EV Hunt List (Solid Matchups + Good Odds)")
-                st.write("The following props have a mathematically favorable matchup baseline AND meet your odds criteria of -105 or better:")
-                st.dataframe(df, use_container_width=True)
-            else:
-                st.info("Scanned current games. No props currently fit BOTH a highly favorable team matchup and the -105 odds filter. Check back as more sportsbooks release lines!")
-
-    except Exception as e:
-        st.error(f"An error occurred: {e}")
+                st.write("### 🏹 Today's EV Hunt List")
+                
+                # Render the table with checkboxes or selection for simulation tracking
+                for idx, row in df.iterrows():
+                    col1, col2, col3, col4 = st.columns([3, 2, 1, 2])
+                    with col1:
+                        st.markdown(f"**{row['Player']}** ({row['Matchup']})")
+                    with col2:
+                        st.markdown(f"`{row['Target']}` | {row['Grade']}")
+                    with col3:
+                        st.markdown(f"**{row['Odds']素}** ({row['Book']})")
+                    with col4:
+                        # Simple buttons to let user simulate grading the bet later
+                        if st.button(f"Simulate Win (+$10)", key=f"win_{idx}"):
+                            profit = 10.0 if row['Odds'] == 100 else (10.0 * (row['Odds']/100) if row['Odds'] > 0 else 10.0 / (abs(row['Odds'])/100))
+                            st.session_state.bankroll += profit
+                            st.session_state.history.append(f"✅ Won: {row['Player']} {row['Target']} ({row['Odds']})")
+                            st.rerun()
+                        if st.button(f"Simulate Loss (-$10)", key=f"loss_{idx}"):
+                            st.session_state.bankroll -= 10.0
+                            st.session_state.history.append(f"❌ Lost: {row['Player']} {row['Target']} ({row['Odds']})")
+                            st.rerun()
+                    st.markdown("---")
+                
+                if st.session_state.history:
+                    st.write("### 📝 Simulation
